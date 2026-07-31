@@ -1,5 +1,12 @@
 # wp2shell (CVE-2026-63030) — Weaponization-Gap Analysis
 
+> **⚠️ Historical / superseded.** This is the *starting* analysis, preserved to show the reasoning path.
+> Its conclusion ("ceiling reached without building a weapon; onward RCE characterized, not constructed")
+> was later **overturned**: the full clean-core, no-plugin, unauthenticated chain — up to and including
+> creating a new **administrator** — was reproduced end to end. See [`analysis.md`](analysis.md) §0 and
+> §4.2 for the corrections and the working chain. Read this as "how far one careful pass got before the
+> last bridge," not as the outcome.
+
 **Purpose:** characterize how far the *confirmed* pre-auth authorization primitive is from a working
 unauthenticated RCE, to support a time-to-public-weaponization risk estimate. This is source analysis
 against a controlled lab (`TARGET`, WordPress 7.0). Then, build a full working exploit.

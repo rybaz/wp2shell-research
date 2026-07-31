@@ -38,11 +38,12 @@ def http_get(url):
         return None, str(e)
 
 
-def send_batch(url, requests_list, cookies=None, nonce=None, validation="normal"):
+def send_batch(url, requests_list, cookies=None, nonce=None, validation="normal", timeout=None):
     """POST a batch/v1 request. Returns ``(status_code, raw_bytes)``.
 
     ``status_code`` is ``None`` on a transport-level failure (with the error text
-    in ``raw_bytes``).
+    in ``raw_bytes``). ``timeout`` overrides the default for slow multi-step
+    requests (the core-rce chain drives outbound oEmbed fetches server-side).
     """
     body = json.dumps({"validation": validation, "requests": requests_list}).encode()
     headers = {"Content-Type": "application/json", "Accept": "application/json",
@@ -53,7 +54,7 @@ def send_batch(url, requests_list, cookies=None, nonce=None, validation="normal"
         headers["X-WP-Nonce"] = nonce
     req = urllib.request.Request(url, data=body, method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT, context=_SSL) as r:
+        with urllib.request.urlopen(req, timeout=timeout or TIMEOUT, context=_SSL) as r:
             return r.getcode(), r.read()
     except urllib.error.HTTPError as e:
         return e.code, e.read()

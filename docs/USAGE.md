@@ -88,7 +88,40 @@ including credential hashes. Treat output as sensitive.
 
 ---
 
-## 3b. `plugin-rce` — code execution via a *vulnerable plugin* (lab demo)
+## 3b. `core-rce` — unauthenticated admin creation on clean core (no plugin)
+
+The full chain. Where `sqli` proves *read*, `core-rce` proves *takeover*: it drives
+WordPress's own privileged code into creating a **new administrator**, over a single
+unauthenticated request, with no plugin. Mechanism and provenance in
+[`analysis.md`](analysis.md) §4.2 and [`../CREDITS.md`](../CREDITS.md) (the escalation
+*sink* was reconstructed independently; the *trigger geometry* is shinthink's).
+
+> **This plants a real administrator account** and inserts `oembed_cache` rows. It is
+> gated behind `--yes`. Run it only against a target you are authorized to modify.
+
+```bash
+wp2shell core-rce http://TARGET/ --yes
+```
+```
+[+] UNAUTHENTICATED ADMINISTRATOR CREATED — no plugin, no auth:
+      login    : wp2_1a2b3c
+      password : Wp2!…
+      user_id  : 4   is_admin: True
+```
+
+**Preconditions.** The chain makes the *server* fetch an oEmbed URL, so the target needs
+**outbound egress** and a reachable oEmbed provider. The default providers are YouTube /
+Vimeo / Twitter; if the target can't reach those, point `--embed-url` at three it can
+(the first is used for the live trigger and must return HTML — your own oEmbed endpoint
+works). Custom table prefix? pass `--prefix`. It is **timing / cache-shadow sensitive**;
+if it reports "chain fired but the admin was not created," just run it again.
+
+**Cleanup.** This does not auto-remove the account. Log in with the printed credentials
+and delete the user, drop the added `oembed_cache` rows, or restore the DB.
+
+---
+
+## 3c. `plugin-rce` — code execution via a *vulnerable plugin* (lab demo)
 
 > **This is not a core capability.** Stock core has no unauthenticated
 > write-a-file-and-execute sink; `plugin-rce` demonstrates the desync's write-side

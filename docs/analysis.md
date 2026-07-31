@@ -25,8 +25,11 @@ characterized, not constructed." Two corrections and one construction were produ
    the executed handler's **own** `permission_callback` still runs, against the donor request. Gate and
    callback come from the *same* drifted handler. A full route-table audit (below) shows **every**
    write-method handler in stock core is `current_user_can`-gated and denies an unauthenticated caller
-   even when fed attacker-chosen parameters. **Single-request unauth RCE against stock core does not
-   exist.** The bug's real teeth are three *other* primitives (§2).
+   even when fed attacker-chosen parameters. **A desync that lands directly on a dangerous write callback
+   cannot bypass that callback's own auth check** — there is no one-hop "seat `POST /wp/v2/users` and run
+   it" RCE. The unauthenticated admin takeover that *does* work (§4.2) reaches privilege a different way —
+   through the SQLi, a fabricated changeset, and WordPress's own identity-borrow — not by substituting onto
+   a dangerous handler. The bug's real teeth are the *other* primitives (§2).
 
 3. **Construction — the working clean-core chain.** A **nested (batch-in-batch)** application of the
    desync reaches the `WP_Query` `author__not_in` SQL injection (CVE-2026-60137) in the posts `get_items`
@@ -154,8 +157,9 @@ provides the permissive-gate + dangerous-callback pair, so a _single-request_, _
 > **Scope note — this is NOT "stock core is safe."** It holds only for a *single-level* desync landing on
 > a *directly dangerous callback*. A **nested (batch-in-batch)** construction (§4, reproduced with our
 > own tooling) reaches an unauthenticated `WP_Query` **SQL injection** (CVE-2026-60137) — full DB read,
-> incl. admin password hashes — and per public disclosure escalates to RCE, with **no plugins**. That
-> multi-step chain, not a single dangerous callback, is the real stock-core pre-auth exposure.
+> incl. admin password hashes — and from there we **reproduced the full escalation to a new
+> unauthenticated administrator** (§4.2), with **no plugins**. That multi-step chain, not a single
+> dangerous callback, is the real stock-core pre-auth exposure.
 
 ---
 
@@ -286,18 +290,47 @@ write. The bridge, reproduced here with our own code:
   non-zero post ID it caches to postmeta instead; the ID-`0` detail is what yields the `oembed_cache`
   post the chain needs.)
 
-From there the disclosed chain is: persist an `oembed_cache` post → forge a `customize_changeset` owned by
-an administrator → `parse_request` re-entry to borrow that identity → `POST /wp/v2/users` as admin →
-webshell. The SQLi never writes; it steers WordPress's own privileged write paths.
+From there the chain steers WordPress's own privileged write paths — the SQLi never writes a user itself.
+The full escalation, **reproduced on clean 7.0.1**, runs entirely inside one request and works like this:
 
-**Reproduction status (honest):** we reproduced the chain up to and including the **write primitive** — the
-UNION-fabricated post (ID 0) reliably causes WordPress to insert `oembed_cache` rows into `wp_posts` on
-demand. The **final admin-elevation** (`customize_changeset`/`request`/`nav_menu_item` fabrication →
-`parse_request` re-entry that sets `current_user` to the admin, so an appended `POST /wp/v2/users`
-executes with `create_users`) was **attempted but not reproduced** here: it depends on the exact
-Customizer re-entry preconditions the disclosers deliberately withheld, and a from-scratch reconstruction
-did not trigger the identity borrow. So on this build we demonstrate unauth **DB read + DB write**; the
-turnkey admin takeover remains the withheld crux.
+1. **Forge the changeset (and its accomplices) into the object cache.** The nested-batch `get_items` UNION
+   returns not one row but a small set of fabricated posts that `WP_Query` caches by ID for the rest of the
+   request: a `customize_changeset` (status `future`, a **past** `post_date` so it is due to publish, and
+   `post_content` holding a Customizer setting `nav_menu_item[...]` tagged `"user_id": 1`), an
+   `oembed_cache` post with **empty** `post_content`, and a couple of helpers wired into a **parent cycle**.
+2. **Trigger an unauthenticated `wp_update_post`.** The fabricated trigger post's `[embed]` content renders
+   during `get_items`; because the forged `oembed_cache` row is empty, `WP_Embed::shortcode()` falls
+   through its cache-hit guard, fetches the URL (a live oEmbed provider returns HTML), and calls
+   `wp_update_post()` on that cache post — an anonymous request writing a post.
+3. **Redirect the write onto the changeset via a hierarchy loop.** `wp_update_post` runs
+   `wp_check_post_hierarchy_for_loops()`, which — on detecting the forged parent cycle — calls
+   `wp_update_post()` on the **loop members**, i.e. the changeset. Re-saving a past-dated `future` post
+   flips it to `publish` (`wp_insert_post`), firing `transition_post_status` →
+   `_wp_customize_publish_changeset()`.
+4. **Borrow the admin identity.** `_publish_changeset_values()` does
+   `wp_set_current_user( $setting['user_id'] )` = user 1 before calling the setting's `save()`
+   (`class-wp-customize-manager.php`; WordPress does this so a scheduled changeset saves with its author's
+   caps). For the length of that save, an anonymous HTTP request **is** the administrator.
+5. **Create the admin.** A `parse_request` re-entry replays the tail of the batch — `POST /wp/v2/users`
+   with `roles:["administrator"]` — while `current_user` is still 1, so `WP_REST_Users_Controller::create_item`
+   passes its `create_users` check and `wp_insert_user()` writes a brand-new administrator. From there,
+   authenticated admin → plugin/theme editor → webshell is routine.
+
+**Reproduction status (honest):** **reproduced end to end.** On clean 7.0.1 a single unauthenticated request
+created a real `administrator`-capability user, confirmed by both a full call-stack trace (the chain in
+step 1–5 above, captured live) and the resulting `wp_users`/`wp_usermeta` rows. Two conditions have to hold
+for the trigger to fire: the target must make a **successful outbound oEmbed fetch** (egress plus a provider
+that returns HTML), and the forged empty cache row must **shadow** the real one in the per-request object
+cache — so "any stock install, zero configuration" undersells the real-world preconditions, but on a
+network-reachable default install it works with no plugin and no auth.
+
+**Provenance (stated plainly, because it is the point of the writeup):** the *sink* — the changeset
+identity-borrow in `_publish_changeset_values()` — we located independently by reading the 7.0.1 source; it
+is what the disclosure withheld, and it was findable from the patch-adjacent code alone. The specific
+*trigger geometry* (routing an unauthenticated `wp_update_post` through the oEmbed cache and a
+hierarchy-loop cascade onto the changeset) we took from a public full-chain PoC. A capable researcher
+assembled that trigger within days of the disclosure, from prior WordPress-exploitation technique; we
+reproduced it once pointed at the geometry. The "held-back" step protected almost no one.
 
 ---
 

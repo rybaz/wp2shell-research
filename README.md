@@ -4,8 +4,10 @@ A research proof-of-concept for **"wp2shell"**: an **unauthenticated** WordPress
 core compromise chain combining a REST batch **handler-permission desync**
 (CVE-2026-63030) with a `WP_Query` **SQL injection** (CVE-2026-60137). Chained via
 a **nested batch**, an anonymous attacker reads arbitrary database contents —
-including administrator password hashes — from a stock install, **no plugins
-required**.
+including administrator password hashes — and, on a stock install with **no plugins**,
+steers WordPress's own privileged code paths to **create a new administrator** from a
+single unauthenticated request (reproduced end to end; see
+[What this demonstrates](#what-this-demonstrates-and-what-it-doesnt)).
 
 > ⚠️ **Authorized security research only.** Read [`AUTHORIZATION.md`](AUTHORIZATION.md)
 > before running anything. These tools act on a single explicitly-specified target
@@ -42,11 +44,18 @@ raw `author_exclude` string → SQL injection. Full mechanics in
 - **Write — clean core, reproduced.** The same SQLi steers WordPress into server-side writes: a
   UNION-fabricated post triggers an `oembed_cache` row insert and an outbound fetch (an unauthenticated
   SSRF). See [`docs/analysis.md`](docs/analysis.md) §4.2.
-- **Code execution — via a vulnerable *plugin*** (`plugin-rce`). Stock core has **no** unauthenticated
-  write-and-execute sink, and every SQL-native shortcut (`INTO OUTFILE`, UDF/`xp_cmdshell`) is blocked by
-  a default WordPress DB account's privileges. The disclosed **no-plugin admin takeover**
-  (oEmbed → `customize_changeset` → admin) is the deliberately-withheld step: it is **documented but not
-  reproduced** in this repo.
+- **Admin takeover — clean core, reproduced.** The disclosed no-plugin escalation
+  (fabricated `customize_changeset` → oEmbed/hierarchy-loop cascade publishes it →
+  `_publish_changeset_values()` borrows the admin identity → `parse_request` re-entry → `POST /wp/v2/users`)
+  was reproduced end to end on clean 7.0.1: a single unauthenticated request created a real
+  `administrator` user, confirmed by call-stack trace and the resulting DB rows. It needs outbound egress
+  and a live oEmbed provider, so it is not literally "zero configuration," but it needs **no plugin and no
+  auth**. Full mechanism and honest provenance in [`docs/analysis.md`](docs/analysis.md) §4.2. Every
+  SQL-*native* shortcut (`INTO OUTFILE`, UDF/`xp_cmdshell`) stays blocked by the DB account's privileges —
+  the write goes through WordPress, not the database.
+- **Code execution — via a vulnerable *plugin*** (`plugin-rce`). A separate, simpler demonstration of the
+  desync's write side against a permissive plugin route (benign `6*7` payload); models the common
+  plugin-exposure class, independent of the core chain above.
 
 ## Layout
 
@@ -56,6 +65,7 @@ wp2shell-research/
 │   ├── http.py           # TLS-tolerant batch transport
 │   ├── desync.py         # 63030 primitives: detect, probe, seat
 │   ├── sqli.py           # 60137 nested-batch UNION/blind extraction
+│   ├── takeover.py       # clean-core unauth admin creation (full chain; core-rce)
 │   └── cli.py            # unified `wp2shell` CLI
 ├── docs/
 │   ├── USAGE.md          # step-by-step usage
@@ -63,6 +73,7 @@ wp2shell-research/
 │   └── weaponization-gap.md
 ├── lab/acme-templates.php  # deliberately-vulnerable plugin for the plugin-rce demo
 ├── AUTHORIZATION.md
+├── CREDITS.md            # provenance: what was independent vs. from shinthink's PoC
 ├── LICENSE               # MIT
 └── pyproject.toml
 ```
@@ -94,6 +105,13 @@ wp2shell sqli http://TARGET/
 # 3) Extract anything
 wp2shell sqli http://TARGET/ --expr "SELECT COUNT(*) FROM wp_users"
 
+# 3b) Full clean-core chain -> a NEW ADMINISTRATOR, unauthenticated, no plugin.
+#     Plants a real account (authorized targets only); needs target egress + oEmbed.
+wp2shell core-rce http://TARGET/ --yes
+#   [+] UNAUTHENTICATED ADMINISTRATOR CREATED — no plugin, no auth:
+#         login    : wp2_1a2b3c
+#         password : Wp2!…
+
 # 4) (lab) Prove code execution via a VULNERABLE PLUGIN route — install
 #    lab/acme-templates.php on a test instance first. This is NOT a core capability.
 wp2shell plugin-rce http://TARGET/
@@ -108,12 +126,13 @@ wp2shell plugin-rce http://TARGET/
 |---|---|---|
 | `check` | none | Detector — VULNERABLE / NOT VULNERABLE (exit 1 / 0). |
 | `sqli` | DB read | Unauthenticated UNION/blind SQL injection (CVE-2026-60137 via 63030), no plugins. |
+| `core-rce` | **creates admin** | Full clean-core chain → a new **administrator**, unauthenticated, no plugin. Plants a real account, so it requires `--yes`; needs target egress + a reachable oEmbed provider. Trigger geometry credit: shinthink ([CREDITS.md](CREDITS.md)). |
 
 **Lab** — needs a deliberately-vulnerable plugin you install yourself:
 
 | Command | Impact | Purpose |
 |---|---|---|
-| `plugin-rce` | code exec | Writes a benign PHP file (default: prints `6*7`) to a **vulnerable plugin** write route via the desync's sanitization bypass and proves the server **executes** it. Models the real-world plugin-exposure class — stock core has no such unauth write sink. Auto-cleans the file. |
+| `plugin-rce` | code exec | Writes a benign PHP file (default: prints `6*7`) to a **vulnerable plugin** write route via the desync's sanitization bypass and proves the server **executes** it. Models the real-world plugin-exposure class — stock core has no unauth *direct file-write* sink (its no-plugin path creates an admin instead; see §4.2). Auto-cleans the file. |
 
 **Research** — raw desync primitives for studying the bug (not scanners):
 
