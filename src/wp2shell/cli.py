@@ -96,6 +96,7 @@ def cmd_sqli(args):
             print("[!] no desync signal — target appears PATCHED (63030 closed) or batch/v1 altered.")
         return 2
 
+    assert extract is not None  # narrowed: the else-branch above returned
     if args.expr:
         print(f"    {args.expr} = {extract(args.expr)}")
         return 0
@@ -112,7 +113,8 @@ def cmd_sqli(args):
 # *vulnerable plugin* write route, then fetches it to prove the server executes it.
 # It needs that vulnerable route (the bundled lab/acme-templates.php models the
 # common real-world anti-pattern). Stock core alone has no such unauth write sink;
-# for the no-plugin path see `core-rce`.
+# for the no-plugin path (SQLi -> read+write, and the withheld admin-takeover step)
+# see docs/analysis.md section 4.2.
 _WE_MARKER = "42-wp2shell-exec-poc"
 _WE_PAYLOAD = '<?php echo (6 * 7) . "-wp2shell-exec-poc"; ?>'  # benign: no input, no syscalls
 

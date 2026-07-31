@@ -92,8 +92,9 @@ including credential hashes. Treat output as sensitive.
 
 > **This is not a core capability.** Stock core has no unauthenticated
 > write-a-file-and-execute sink; `plugin-rce` demonstrates the desync's write-side
-> impact against a **vulnerable plugin** route. For the no-plugin path (SQLi →
-> admin takeover on stock core), see `core-rce`.
+> impact against a **vulnerable plugin** route. The clean-core path (SQLi → DB
+> read + write, and the deliberately-withheld admin-takeover step we did not
+> reproduce) is documented in [`analysis.md`](analysis.md) §4.2.
 
 Where `sqli` proves *read*, `plugin-rce` proves *write + execute* through a
 vulnerable plugin. It uses the desync's sanitization bypass (primitive P3) to write
