@@ -24,7 +24,7 @@ illegal in most jurisdictions and is not condoned by the authors.
 - `sqli` — **reads** database contents (including password hashes) via SQL
   injection. It does not write to the database, but extracting credential
   material is high-impact — treat output as sensitive.
-- `write-exec` — **writes a file and achieves code execution.** It plants a
+- `plugin-rce` — **writes a file and achieves code execution.** It plants a
   **benign** PHP file (default: prints `6*7`; no shell, no input handling) and
   fetches it to prove execution, then overwrites it with an inert stub. It needs a
   **deliberately vulnerable lab plugin** (`lab/acme-templates.php`) that you install

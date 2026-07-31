@@ -88,11 +88,17 @@ including credential hashes. Treat output as sensitive.
 
 ---
 
-## 3b. `write-exec` — prove unauthenticated code execution
+## 3b. `plugin-rce` — code execution via a *vulnerable plugin* (lab demo)
 
-Where `sqli` proves *read*, `write-exec` proves *write + execute*. It uses the
-desync's sanitization bypass (primitive P3) to write a **benign** PHP file to a
-vulnerable plugin write route, then fetches it to show the server runs it. The
+> **This is not a core capability.** Stock core has no unauthenticated
+> write-a-file-and-execute sink; `plugin-rce` demonstrates the desync's write-side
+> impact against a **vulnerable plugin** route. For the no-plugin path (SQLi →
+> admin takeover on stock core), see `core-rce`.
+
+Where `sqli` proves *read*, `plugin-rce` proves *write + execute* through a
+vulnerable plugin. It uses the desync's sanitization bypass (primitive P3) to write
+a **benign** PHP file to that plugin's write route, then fetches it to show the
+server runs it. The
 default payload is inert (`<?php echo 6*7 . "-wp2shell-exec-poc"; ?>` → prints
 `42-wp2shell-exec-poc`) — no shell, no input handling, no system calls.
 
@@ -103,7 +109,7 @@ writes the attacker-supplied filename). Install it on your test instance first:
 ```bash
 cp lab/acme-templates.php /path/to/wordpress/wp-content/mu-plugins/
 # then:
-wp2shell write-exec http://TARGET/
+wp2shell plugin-rce http://TARGET/
 ```
 ```
 [+] wrote 45 bytes of raw PHP to wp-content/uploads/acme-templates/wp2shell_<hex>.php

