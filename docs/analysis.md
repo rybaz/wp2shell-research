@@ -253,6 +253,36 @@ public disclosures report onward escalation to full RCE (admin creation → webs
 authorization-integrity bug** — chained with 60137 through nested batch it yields unauthenticated data
 exfiltration (and, per the disclosure, onward escalation to RCE) on stock core, no plugins.
 
+### 4.2 From read to write: why the SQLi can't write directly, and the bridge that lets it
+
+The obvious question is "why not just `UPDATE wp_users` / `INSERT` an admin from the injection?" On a
+default install you can't, for three independent reasons — all worth understanding, because they explain
+why the disclosed RCE chain is so convoluted:
+
+- **Single-statement sink.** The injection is a `UNION`-able **`SELECT`** inside one `$wpdb` call
+  (`get_items` → `WP_Query`), run via `mysqli_query`, which executes **one** statement. `1); UPDATE …-- `
+  never runs — no stacked queries.
+- **No DML in a SELECT.** MySQL/MariaDB does not allow `INSERT`/`UPDATE`/`DELETE` inside a `SELECT`
+  subquery, so there is no in-band way to mutate a row.
+- **No file write.** `SELECT … INTO OUTFILE` needs the global **`FILE`** privilege *and* a permissive
+  `secure_file_priv`. On a stock lab both are denied: the WP DB user has `ALL PRIVILEGES ON <db>.*` but
+  only `USAGE ON *.*` (no `FILE`), and `@@secure_file_priv` is `NULL` (OUTFILE disabled entirely).
+
+So the DB account *can* write `wp_users` (it owns the database), but the injection **vector** can't reach
+an `INSERT`/`UPDATE` or a file write. The attacker must therefore make **WordPress itself** perform the
+write. The bridge, reproduced here with our own code:
+
+- **Fabricated-post rendering → server-side action (unauth SSRF / cache write).** Surfacing a
+  UNION-fabricated `publish`/`post` row whose `post_content` is an `[embed]…[/embed]` shortcode causes
+  `get_items` to render it (the `the_content` filters run oEmbed autoembed), and **the server issues an
+  outbound request to the embedded URL** — confirmed live: the target fetched a loopback marker URL under
+  the `WordPress/7.0.1` user-agent. That converts the read-only SQLi into server-side actions.
+
+From there the disclosed chain is: persist an `oembed_cache` post → forge a `customize_changeset` owned by
+an administrator → `parse_request` re-entry to borrow that identity → `POST /wp/v2/users` as admin →
+webshell. The SQLi never writes; it steers WordPress's own privileged write paths. (Reproduction of the
+full admin-takeover chain is in progress; the read→write bridge above is demonstrated.)
+
 ---
 
 ## 5. Defensive measures (the deliverable)
