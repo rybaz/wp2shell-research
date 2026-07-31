@@ -35,6 +35,19 @@ method validation, allowing GET), and the inner desync seats `get_items` with a
 raw `author_exclude` string → SQL injection. Full mechanics in
 [`docs/analysis.md`](docs/analysis.md).
 
+## What this demonstrates (and what it doesn't)
+
+- **Read — clean core, reproduced.** Unauthenticated SQLi → full database read, including admin
+  password hashes (`sqli`). Verified black-box against a fresh install.
+- **Write — clean core, reproduced.** The same SQLi steers WordPress into server-side writes: a
+  UNION-fabricated post triggers an `oembed_cache` row insert and an outbound fetch (an unauthenticated
+  SSRF). See [`docs/analysis.md`](docs/analysis.md) §4.2.
+- **Code execution — via a vulnerable *plugin*** (`plugin-rce`). Stock core has **no** unauthenticated
+  write-and-execute sink, and every SQL-native shortcut (`INTO OUTFILE`, UDF/`xp_cmdshell`) is blocked by
+  a default WordPress DB account's privileges. The disclosed **no-plugin admin takeover**
+  (oEmbed → `customize_changeset` → admin) is the deliberately-withheld step: it is **documented but not
+  reproduced** in this repo.
+
 ## Layout
 
 ```
