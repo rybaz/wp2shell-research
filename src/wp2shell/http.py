@@ -26,6 +26,18 @@ def endpoints(base):
     return [base + "/wp-json/batch/v1", base + "/?rest_route=/batch/v1"]
 
 
+def http_get(url):
+    """Plain GET. Returns ``(status_code, text)`` (used to fetch a planted file)."""
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT, context=_SSL) as r:
+            return r.getcode(), r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        return None, str(e)
+
+
 def send_batch(url, requests_list, cookies=None, nonce=None, validation="normal"):
     """POST a batch/v1 request. Returns ``(status_code, raw_bytes)``.
 

