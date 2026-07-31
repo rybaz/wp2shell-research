@@ -267,6 +267,10 @@ why the disclosed RCE chain is so convoluted:
 - **No file write.** `SELECT … INTO OUTFILE` needs the global **`FILE`** privilege *and* a permissive
   `secure_file_priv`. On a stock lab both are denied: the WP DB user has `ALL PRIVILEGES ON <db>.*` but
   only `USAGE ON *.*` (no `FILE`), and `@@secure_file_priv` is `NULL` (OUTFILE disabled entirely).
+- **No OS command exec.** MySQL/MariaDB has no `xp_cmdshell` (that is MSSQL). The equivalent — a
+  `sys_exec()` UDF (`lib_mysqludf_sys`) — cannot be installed: it needs a writable `plugin_dir`
+  (`/usr/lib/mysql/plugin/` is `root:root`) plus global `CREATE FUNCTION`/`FILE`, none of which the
+  database-scoped WP user has, and `mysql.func` is empty (no pre-installed UDF to abuse).
 
 So the DB account *can* write `wp_users` (it owns the database), but the injection **vector** can't reach
 an `INSERT`/`UPDATE` or a file write. The attacker must therefore make **WordPress itself** perform the
