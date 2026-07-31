@@ -272,16 +272,28 @@ So the DB account *can* write `wp_users` (it owns the database), but the injecti
 an `INSERT`/`UPDATE` or a file write. The attacker must therefore make **WordPress itself** perform the
 write. The bridge, reproduced here with our own code:
 
-- **Fabricated-post rendering → server-side action (unauth SSRF / cache write).** Surfacing a
-  UNION-fabricated `publish`/`post` row whose `post_content` is an `[embed]…[/embed]` shortcode causes
-  `get_items` to render it (the `the_content` filters run oEmbed autoembed), and **the server issues an
-  outbound request to the embedded URL** — confirmed live: the target fetched a loopback marker URL under
-  the `WordPress/7.0.1` user-agent. That converts the read-only SQLi into server-side actions.
+- **Fabricated-post rendering → server-side action → real DB write.** Surfacing a UNION-fabricated
+  `publish`/`post` row (with **ID `0`**) whose `post_content` is an `[embed]…[/embed]` shortcode causes
+  `get_items` to render it (the `the_content` filters run oEmbed autoembed). Two effects, both confirmed
+  live: (1) **the server issues an outbound request** to the embedded URL (the target fetched a loopback
+  marker URL under the `WordPress/7.0.1` UA — an unauthenticated SSRF); and (2) because the rendering
+  post's ID is `0`, WordPress caches the result as an **`oembed_cache` post inserted into `wp_posts`** — a
+  genuine **unauthenticated database write** triggered entirely through the read-only SQLi. (With a
+  non-zero post ID it caches to postmeta instead; the ID-`0` detail is what yields the `oembed_cache`
+  post the chain needs.)
 
 From there the disclosed chain is: persist an `oembed_cache` post → forge a `customize_changeset` owned by
 an administrator → `parse_request` re-entry to borrow that identity → `POST /wp/v2/users` as admin →
-webshell. The SQLi never writes; it steers WordPress's own privileged write paths. (Reproduction of the
-full admin-takeover chain is in progress; the read→write bridge above is demonstrated.)
+webshell. The SQLi never writes; it steers WordPress's own privileged write paths.
+
+**Reproduction status (honest):** we reproduced the chain up to and including the **write primitive** — the
+UNION-fabricated post (ID 0) reliably causes WordPress to insert `oembed_cache` rows into `wp_posts` on
+demand. The **final admin-elevation** (`customize_changeset`/`request`/`nav_menu_item` fabrication →
+`parse_request` re-entry that sets `current_user` to the admin, so an appended `POST /wp/v2/users`
+executes with `create_users`) was **attempted but not reproduced** here: it depends on the exact
+Customizer re-entry preconditions the disclosers deliberately withheld, and a from-scratch reconstruction
+did not trigger the identity borrow. So on this build we demonstrate unauth **DB read + DB write**; the
+turnkey admin takeover remains the withheld crux.
 
 ---
 
